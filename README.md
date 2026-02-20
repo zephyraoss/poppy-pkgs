@@ -10,6 +10,12 @@ go run ./cmd/poppypkgs
 
 ## API (v1)
 
+**We now have a public API you can use at `pkgs.poppy.party`**. If you wish to use the API we ask that you do the following.
+
+- When possible, use a `User-Agent` header. They should be formated like `Author/My App Name (1.0.0)`
+- There are no rate limits implemented, but when possible try to keep requests down to under 5 requests per second.
+- When utilizing our our hosted API, please link to `https://poppy.party` somewhere in your app.
+- When hosting `poppy-pkgs` on your own infrastructure, please link to this repository somewhere in your app.
 
 ### Endpoints
 
