@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -149,6 +151,9 @@ func (s *Server) rawManifest(c *fiber.Ctx) error {
 	if err != nil {
 		return writeManifestError(c, err)
 	}
+	if applyManifestCachingHeaders(c, m) {
+		return c.SendStatus(fiber.StatusNotModified)
+	}
 	c.Set(fiber.HeaderContentType, "application/x-yaml; charset=utf-8")
 	return c.SendString(m.RawYAML)
 }
@@ -158,10 +163,77 @@ func (s *Server) downloadManifest(c *fiber.Ctx) error {
 	if err != nil {
 		return writeManifestError(c, err)
 	}
+	if applyManifestCachingHeaders(c, m) {
+		return c.SendStatus(fiber.StatusNotModified)
+	}
 	filename := filepath.Base(m.Path)
 	c.Set(fiber.HeaderContentType, "application/x-yaml; charset=utf-8")
 	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%q", filename))
 	return c.SendString(m.RawYAML)
+}
+
+func applyManifestCachingHeaders(c *fiber.Ctx, m store.ManifestFile) bool {
+	etag := fmt.Sprintf("\"%s\"", m.SHA256)
+	c.Set(fiber.HeaderETag, etag)
+
+	modifiedAt, ok := parseManifestUpdatedAt(m.UpdatedAt)
+	if ok {
+		c.Set(fiber.HeaderLastModified, modifiedAt.UTC().Format(http.TimeFormat))
+	}
+
+	if etagMatches(c.Get(fiber.HeaderIfNoneMatch), etag) {
+		return true
+	}
+
+	if ok {
+		ifModifiedSince := c.Get(fiber.HeaderIfModifiedSince)
+		if ifModifiedSince != "" {
+			since, err := http.ParseTime(ifModifiedSince)
+			if err == nil && !modifiedAt.After(since) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func parseManifestUpdatedAt(v string) (time.Time, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		t, err := time.Parse(layout, v)
+		if err == nil {
+			if layout == "2006-01-02 15:04:05" {
+				t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
+			}
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func etagMatches(ifNoneMatch, etag string) bool {
+	ifNoneMatch = strings.TrimSpace(ifNoneMatch)
+	if ifNoneMatch == "" {
+		return false
+	}
+	if ifNoneMatch == "*" {
+		return true
+	}
+	for _, candidate := range strings.Split(ifNoneMatch, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if strings.HasPrefix(candidate, "W/") {
+			candidate = strings.TrimPrefix(candidate, "W/")
+			candidate = strings.TrimSpace(candidate)
+		}
+		if candidate == etag {
+			return true
+		}
+	}
+	return false
 }
 
 var errInvalidManifestID = errors.New("invalid manifest id")

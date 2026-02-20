@@ -64,6 +64,7 @@ type ManifestFile struct {
 	ShortDescription string   `json:"short_description,omitempty"`
 	Tags             []string `json:"tags,omitempty"`
 	SHA256           string   `json:"sha256"`
+	UpdatedAt        string   `json:"-"`
 	RawYAML          string   `json:"-"`
 }
 
@@ -792,7 +793,7 @@ func (d *DB) GetManifest(ctx context.Context, packageID, packageVersion string, 
 	var tagsJSON string
 	err := d.sql.QueryRowContext(ctx, `
 		SELECT manifest_id, path, manifest_type, package_locale, channel,
-			package_name, publisher, moniker, short_description, tags_json, sha256, raw_yaml
+			package_name, publisher, moniker, short_description, tags_json, sha256, updated_at, raw_yaml
 		FROM manifest_files
 		WHERE package_id = ? AND package_version = ? AND manifest_id = ?
 	`, packageID, packageVersion, manifestID).Scan(
@@ -807,6 +808,7 @@ func (d *DB) GetManifest(ctx context.Context, packageID, packageVersion string, 
 		&m.ShortDescription,
 		&tagsJSON,
 		&m.SHA256,
+		&m.UpdatedAt,
 		&m.RawYAML,
 	)
 	if err != nil {
