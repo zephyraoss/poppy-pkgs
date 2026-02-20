@@ -1,0 +1,25 @@
+version: "3"
+
+tasks:
+  fmt:
+    desc: Format Go source files
+    cmds:
+      - gofmt -w ./cmd ./internal
+
+  lint:
+    desc: Run static checks
+    cmds:
+      - go vet ./...
+
+  build:
+    desc: Build binary into testing folder
+    cmds:
+      - mkdir -p testing
+      - go build -o ./testing/poppypkgs.exe ./cmd/poppypkgs
+
+  all:
+    desc: Format, lint, and build
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: build
