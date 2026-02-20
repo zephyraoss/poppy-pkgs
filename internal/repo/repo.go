@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+var ErrRevisionUnavailable = errors.New("revision unavailable for diff")
+
 type Client struct {
 	remoteURL string
 	localPath string
@@ -35,14 +37,8 @@ func (c *Client) Ensure(ctx context.Context) error {
 	if _, err := os.Stat(c.localPath); err == nil {
 		if _, checkErr := run(ctx, c.localPath, "git", "rev-parse", "--is-inside-work-tree"); checkErr == nil {
 			_ = removeStaleGitLock(filepath.Join(c.localPath, ".git", "index.lock"), c.logger)
-			if _, statErr := os.Stat(filepath.Join(c.localPath, "manifests")); statErr == nil {
-				fmt.Println("[repo] local mirror already exists")
-				return nil
-			}
-			fmt.Println("[repo] local mirror missing manifests folder, recloning")
-			if rmErr := os.RemoveAll(c.localPath); rmErr != nil {
-				return rmErr
-			}
+			fmt.Println("[repo] local mirror already exists")
+			return nil
 		} else {
 			if hasManifestsDir(c.localPath) {
 				fmt.Println("[repo] no .git metadata; using local manifests snapshot (updates disabled until repo is re-cloned)")
@@ -128,8 +124,17 @@ func (c *Client) DiffManifestPaths(ctx context.Context, fromCommit, toCommit str
 	if fromCommit == "" || toCommit == "" {
 		return upserts, deletions, nil
 	}
+	if err := c.ensureCommitAvailable(ctx, fromCommit); err != nil {
+		return nil, nil, err
+	}
+	if err := c.ensureCommitAvailable(ctx, toCommit); err != nil {
+		return nil, nil, err
+	}
 	out, err := run(ctx, c.localPath, "git", "diff", "--name-status", fromCommit+".."+toCommit, "--", "manifests/")
 	if err != nil {
+		if isRevisionRangeError(err) {
+			return nil, nil, fmt.Errorf("%w: %v", ErrRevisionUnavailable, err)
+		}
 		return nil, nil, err
 	}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -161,6 +166,54 @@ func (c *Client) DiffManifestPaths(ctx context.Context, fromCommit, toCommit str
 		upserts = append(upserts, path)
 	}
 	return upserts, deletions, nil
+}
+
+func (c *Client) ensureCommitAvailable(ctx context.Context, commit string) error {
+	if commit == "" {
+		return nil
+	}
+	if commitAvailable(ctx, c.localPath, commit) {
+		return nil
+	}
+	if !isShallowRepo(c.localPath) {
+		return fmt.Errorf("%w: %s", ErrRevisionUnavailable, commit)
+	}
+
+	deepen := 128
+	for deepen <= 32768 {
+		if c.logger != nil {
+			c.logger.Info("deepening shallow mirror for missing commit", "commit", shortCommit(commit), "deepen", deepen)
+		}
+		if err := c.runWithProgress(ctx, c.localPath, "fetch-deepen", "git", "fetch", "--progress", "--deepen", strconv.Itoa(deepen), "--no-tags", "origin", "master"); err != nil {
+			return err
+		}
+		if commitAvailable(ctx, c.localPath, commit) {
+			return nil
+		}
+		deepen *= 2
+	}
+
+	return fmt.Errorf("%w: %s", ErrRevisionUnavailable, commit)
+}
+
+func commitAvailable(ctx context.Context, repoPath, commit string) bool {
+	_, err := run(ctx, repoPath, "git", "cat-file", "-e", commit+"^{commit}")
+	return err == nil
+}
+
+func isShallowRepo(repoPath string) bool {
+	_, err := os.Stat(filepath.Join(repoPath, ".git", "shallow"))
+	return err == nil
+}
+
+func isRevisionRangeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid revision range") ||
+		strings.Contains(msg, "bad object") ||
+		strings.Contains(msg, "unknown revision")
 }
 
 func (c *Client) ListManifestFiles(ctx context.Context) ([]string, error) {
