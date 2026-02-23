@@ -823,7 +823,7 @@ func buildFTSQuery(input string) string {
 	if input == "" {
 		return ""
 	}
-	re := regexp.MustCompile(`[^a-z0-9._-]+`)
+	re := regexp.MustCompile(`[^a-z0-9]+`)
 	parts := strings.Fields(re.ReplaceAllString(input, " "))
 	if len(parts) == 0 {
 		return ""
